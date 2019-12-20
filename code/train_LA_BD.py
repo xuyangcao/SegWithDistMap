@@ -1,7 +1,7 @@
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import sys
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
 import shutil
 import argparse
 import logging
@@ -15,134 +15,65 @@ from torchvision import transforms
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
 from networks.vnet import VNet
 from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
 from scipy.ndimage import distance_transform_edt as distance
 from skimage import segmentation as skimage_seg
+from utils.losses import dice_loss, boundary_loss, compute_sdf
 # Heart MR segmentation with boundary loss
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
-parser.add_argument('--exp', type=str,  default='vnet_dp_bd_sdf', help='model_name')
-parser.add_argument('--max_iterations', type=int,  default=20000, help='maximum epoch number to train')
-parser.add_argument('--batch_size', type=int, default=4, help='batch_size per gpu')
-parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
-parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
-parser.add_argument('--seed', type=int,  default=2019, help='random seed')
-parser.add_argument('--gpu', type=str,  default='0', help='GPU to use')
-args = parser.parse_args()
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
+    parser.add_argument('--exp', type=str,  default='vnet_dp_bd_sdf', help='model_name')
+    parser.add_argument('--max_iterations', type=int,  default=20000, help='maximum epoch number to train')
+    parser.add_argument('--batch_size', type=int, default=4, help='batch_size per gpu')
+    parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
+    parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
+    parser.add_argument('--seed', type=int,  default=2019, help='random seed')
+    parser.add_argument('--save', type=str, default='./work/la_heart/test-10-20')
+    parser.add_argument('--ngpu', type=int, default=1)
+    parser.add_argument('--writer_dir', type=str, default='./log/la_heart/')
+    args = parser.parse_args()
 
-train_data_path = args.root_path
-snapshot_path = "../model_la/" + args.exp + "/"
+    return args
 
-os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-batch_size = args.batch_size * len(args.gpu.split(','))
-max_iterations = args.max_iterations
-base_lr = args.base_lr
+def main():
+    ###################
+    # init parameters #
+    ###################
+    args = get_args()
+    # training path
+    train_data_path = args.root_path
+    # writer
+    idx = args.save.rfind('/')
+    log_dir = args.writer_dir + args.save[idx:]
+    writer = SummaryWriter(log_dir)
 
-if args.deterministic:
-    cudnn.benchmark = False
-    cudnn.deterministic = True
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
+    batch_size = args.batch_size * args.ngpu 
+    max_iterations = args.max_iterations
+    base_lr = args.base_lr
 
-def dice_loss(score, target):
-    target = target.float()
-    smooth = 1e-5
-    intersect = torch.sum(score * target)
-    y_sum = torch.sum(target * target)
-    z_sum = torch.sum(score * score)
-    loss = (2 * intersect + smooth) / (z_sum + y_sum + smooth)
-    loss = 1 - loss
-    return loss
+    patch_size = (112, 112, 80)
+    num_classes = 2
 
-def compute_sdf1_1(img_gt, out_shape):
-    """
-    compute the normalized signed distance map of binary mask
-    input: segmentation, shape = (batch_size, x, y, z)
-    output: the Signed Distance Map (SDM) 
-    sdf(x) = 0; x in segmentation boundary
-             -inf|x-y|; x in segmentation
-             +inf|x-y|; x out of segmentation
-    normalize sdf to [-1, 1]
-    """
+    if args.deterministic:
+        cudnn.benchmark = False
+        cudnn.deterministic = True
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed(args.seed)
 
-    img_gt = img_gt.astype(np.uint8)
-
-    normalized_sdf = np.zeros(out_shape)
-
-    for b in range(out_shape[0]): # batch size
-            # ignore background
-        for c in range(1, out_shape[1]):
-            posmask = img_gt[b]
-            negmask = 1-posmask
-            posdis = distance(posmask)
-            negdis = distance(negmask)
-            boundary = skimage_seg.find_boundaries(posmask, mode='inner').astype(np.uint8)
-            sdf = (negdis-np.min(negdis))/(np.max(negdis)-np.min(negdis)) - (posdis-np.min(posdis))/(np.max(posdis)-np.min(posdis))
-            sdf[boundary==1] = 0
-            normalized_sdf[b][c] = sdf
-            assert np.min(sdf) == -1.0, print(np.min(posdis), np.min(negdis), np.max(posdis), np.max(negdis))
-            assert np.max(sdf) ==  1.0, print(np.min(posdis), np.min(negdis), np.max(posdis), np.max(negdis))
-
-    return normalized_sdf
-
-def compute_sdf(img_gt, out_shape):
-    """
-    compute the signed distance map of binary mask
-    input: segmentation, shape = (batch_size, x, y, z)
-    output: the Signed Distance Map (SDM) 
-    sdf(x) = 0; x in segmentation boundary
-             -inf|x-y|; x in segmentation
-             +inf|x-y|; x out of segmentation
-    """
-
-    img_gt = img_gt.astype(np.uint8)
-
-    gt_sdf = np.zeros(out_shape)
-
-    for b in range(out_shape[0]): # batch size
-        for c in range(1, out_shape[1]):
-            posmask = img_gt[b]
-            negmask = 1-posmask
-            posdis = distance(posmask)
-            negdis = distance(negmask)
-            boundary = skimage_seg.find_boundaries(posmask, mode='inner').astype(np.uint8)
-            sdf = negdis - posdis
-            sdf[boundary==1] = 0
-            gt_sdf[b][c] = sdf
-
-    return gt_sdf
-
-def boundary_loss(outputs_soft, gt_sdf):
-    """
-    compute boundary loss for binary segmentation
-    input: outputs_soft: softmax results,  shape=(b,2,x,y,z)
-           gt_sdf: sdf of ground truth (can be original or normalized sdf); shape=(b,2,x,y,z)
-    output: boundary_loss; sclar
-    """
-    pc = outputs_soft[:,1,...]
-    dc = gt_sdf[:,1,...]
-    multipled = torch.einsum('bxyz, bxyz->bxyz', pc, dc)
-    bd_loss = multipled.mean()
-
-    return bd_loss
-
-patch_size = (112, 112, 80)
-num_classes = 2
-
-if __name__ == "__main__":
     ## make logger file
-    if not os.path.exists(snapshot_path):
-        os.makedirs(snapshot_path)
-    if os.path.exists(snapshot_path + '/code'):
-        shutil.rmtree(snapshot_path + '/code')
-    shutil.copytree('.', snapshot_path + '/code', shutil.ignore_patterns(['.git','__pycache__']))
+    if os.path.exists(args.save):
+        shutil.rmtree(args.save)
+    os.makedirs(args.save, exist_ok=True)
 
+    snapshot_path = args.save
     logging.basicConfig(filename=snapshot_path+"/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
@@ -167,7 +98,6 @@ if __name__ == "__main__":
     net.train()
     optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
 
-    writer = SummaryWriter(snapshot_path+'/log', flush_secs=2)
     logging.info("{} itertations per epoch".format(len(trainloader)))
 
     iter_num = 0
@@ -256,3 +186,6 @@ if __name__ == "__main__":
     torch.save(net.state_dict(), save_mode_path)
     logging.info("save model to {}".format(save_mode_path))
     writer.close()
+
+if __name__ == "__main__":
+    main()

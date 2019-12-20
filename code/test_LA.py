@@ -11,8 +11,8 @@ parser.add_argument('--gpu', type=str,  default='0', help='GPU to use')
 FLAGS = parser.parse_args()
 
 os.environ['CUDA_VISIBLE_DEVICES'] = FLAGS.gpu
-snapshot_path = "../model/"+FLAGS.model+"/" 
-test_save_path = "../model/prediction/"+FLAGS.model+"_post/"
+snapshot_path = "./work/la_heart/test-10-20/" 
+test_save_path = "./results/la_heart/"
 if not os.path.exists(test_save_path):
     os.makedirs(test_save_path)
 
@@ -38,5 +38,5 @@ def test_calculate_metric(epoch_num):
 
 
 if __name__ == '__main__':
-    metric = test_calculate_metric(5000)
+    metric = test_calculate_metric(2000)
     # print(metric)

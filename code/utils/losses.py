@@ -26,6 +26,20 @@ def dice_loss1(score, target):
     loss = 1 - loss
     return loss
 
+def boundary_loss(outputs_soft, gt_sdf):
+    """
+    compute boundary loss for binary segmentation
+    input: outputs_soft: sigmoid results,  shape=(b,2,x,y,z)
+           gt_sdf: sdf of ground truth (can be original or normalized sdf); shape=(b,2,x,y,z)
+    output: boundary_loss; sclar
+    """
+    pc = outputs_soft[:,1,...]
+    dc = gt_sdf[:,1,...]
+    multipled = torch.einsum('bxyz, bxyz->bxyz', pc, dc)
+    bd_loss = multipled.mean()
+
+    return bd_loss
+
 def iou_loss(score, target):
     target = target.float()
     smooth = 1e-5
@@ -111,6 +125,32 @@ def symmetric_mse_loss(input1, input2):
     return torch.mean((input1 - input2)**2)
 
 
+def compute_sdf(img_gt, out_shape):
+    """
+    compute the signed distance map of binary mask
+    input: segmentation, shape = (batch_size, x, y, z)
+    output: the Signed Distance Map (SDM) 
+    sdf(x) = 0; x in segmentation boundary
+             -inf|x-y|; x in segmentation
+             +inf|x-y|; x out of segmentation
+    """
+
+    img_gt = img_gt.astype(np.uint8)
+
+    gt_sdf = np.zeros(out_shape)
+
+    for b in range(out_shape[0]): # batch size
+        for c in range(1, out_shape[1]):
+            posmask = img_gt[b]
+            negmask = 1-posmask
+            posdis = distance(posmask)
+            negdis = distance(negmask)
+            boundary = skimage_seg.find_boundaries(posmask, mode='inner').astype(np.uint8)
+            sdf = negdis - posdis
+            sdf[boundary==1] = 0
+            gt_sdf[b][c] = sdf
+
+    return gt_sdf
 
 
 
