@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 import sys
 from tqdm import tqdm
 import shutil
@@ -28,15 +28,17 @@ from utils.losses import dice_loss, boundary_loss, compute_sdf
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
-    parser.add_argument('--exp', type=str,  default='vnet_dp_bd_sdf', help='model_name')
-    parser.add_argument('--max_iterations', type=int,  default=20000, help='maximum epoch number to train')
-    parser.add_argument('--batch_size', type=int, default=4, help='batch_size per gpu')
+
+    parser.add_argument('--max_iterations', type=int,  default=6000, help='maximum epoch number to train')
+    parser.add_argument('--batch_size', type=int, default=6, help='batch_size per gpu')
+    parser.add_argument('--ngpu', type=int, default=1)
     parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
+
     parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
     parser.add_argument('--seed', type=int,  default=2019, help='random seed')
-    parser.add_argument('--save', type=str, default='./work/la_heart/test-10-20')
-    parser.add_argument('--ngpu', type=int, default=1)
-    parser.add_argument('--writer_dir', type=str, default='./log/la_heart/')
+
+    parser.add_argument('--save', type=str, default='../work/la_heart/boundary_loss')
+    parser.add_argument('--writer_dir', type=str, default='../log/la_heart/')
     args = parser.parse_args()
 
     return args
@@ -60,6 +62,7 @@ def main():
     patch_size = (112, 112, 80)
     num_classes = 2
 
+    # random
     if args.deterministic:
         cudnn.benchmark = False
         cudnn.deterministic = True
@@ -72,29 +75,23 @@ def main():
     if os.path.exists(args.save):
         shutil.rmtree(args.save)
     os.makedirs(args.save, exist_ok=True)
-
     snapshot_path = args.save
     logging.basicConfig(filename=snapshot_path+"/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
 
-    net = VNet(n_channels=1, n_classes=num_classes, normalization='batchnorm', has_dropout=True)
-    net = net.cuda()
-
+    #training set
     db_train = LAHeart(base_dir=train_data_path,
                        split='train',
                        num=16,
-                       transform = transforms.Compose([
-                          RandomRotFlip(),
-                          RandomCrop(patch_size),
-                          ToTensor(),
-                          ]))
-
+                       transform = transforms.Compose([ RandomRotFlip(), RandomCrop(patch_size), ToTensor()]))
     def worker_init_fn(worker_id):
         random.seed(args.seed+worker_id)
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,  num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn)
 
+    net = VNet(n_channels=1, n_classes=num_classes, normalization='batchnorm', has_dropout=True)
+    net = net.cuda()
     net.train()
     optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
 

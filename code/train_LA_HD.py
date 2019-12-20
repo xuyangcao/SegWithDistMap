@@ -1,7 +1,7 @@
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import sys
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
 import shutil
 import argparse
 import logging
@@ -15,50 +15,32 @@ from torchvision import transforms
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
 from networks.vnet import VNet
 from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
 from scipy.ndimage import distance_transform_edt as distance
+from utils.losses import dice_loss
 
 # Heart MR segmentation with hausdorff distance loss
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
-parser.add_argument('--exp', type=str,  default='vnet_dp_hd_dt', help='model_name')
-parser.add_argument('--max_iterations', type=int,  default=20000, help='maximum epoch number to train')
-parser.add_argument('--batch_size', type=int, default=4, help='batch_size per gpu')
-parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
-parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
-parser.add_argument('--seed', type=int,  default=2019, help='random seed')
-parser.add_argument('--gpu', type=str,  default='0', help='GPU to use')
-args = parser.parse_args()
+    parser.add_argument('--max_iterations', type=int,  default=6000, help='maximum epoch number to train')
+    parser.add_argument('--batch_size', type=int, default=6, help='batch_size per gpu')
+    parser.add_argument('--ngpu', type=int, default=1)
+    parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
 
-train_data_path = args.root_path
-snapshot_path = "../model_la/" + args.exp + "/"
+    parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
+    parser.add_argument('--seed', type=int,  default=2019, help='random seed')
 
-os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-batch_size = args.batch_size * len(args.gpu.split(','))
-max_iterations = args.max_iterations
-base_lr = args.base_lr
+    parser.add_argument('--save', type=str, default='../work/la_heart/test')
+    parser.add_argument('--writer_dir', type=str, default='../log/la_heart/')
+    args = parser.parse_args()
 
-if args.deterministic:
-    cudnn.benchmark = False
-    cudnn.deterministic = True
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-
-def dice_loss(score, target):
-    target = target.float()
-    smooth = 1e-5
-    intersect = torch.sum(score * target)
-    y_sum = torch.sum(target * target)
-    z_sum = torch.sum(score * score)
-    loss = (2 * intersect + smooth) / (z_sum + y_sum + smooth)
-    loss = 1 - loss
-    return loss
+    return args
 
 def compute_dtm01(img_gt, out_shape):
     """
@@ -122,17 +104,39 @@ def hd_loss(seg_soft, gt, seg_dtm, gt_dtm):
 
     return hd_loss
 
-patch_size = (112, 112, 80)
-num_classes = 2
+def main():
+    ###################
+    # init parameters #
+    ###################
+    args = get_args()
+    # training path
+    train_data_path = args.root_path
+    # writer
+    idx = args.save.rfind('/')
+    log_dir = args.writer_dir + args.save[idx:]
+    writer = SummaryWriter(log_dir)
 
-if __name__ == "__main__":
+    batch_size = args.batch_size * args.ngpu 
+    max_iterations = args.max_iterations
+    base_lr = args.base_lr
+
+    patch_size = (112, 112, 80)
+    num_classes = 2
+
+    # random
+    if args.deterministic:
+        cudnn.benchmark = False
+        cudnn.deterministic = True
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed(args.seed)
+
     ## make logger file
-    if not os.path.exists(snapshot_path):
-        os.makedirs(snapshot_path)
-    if os.path.exists(snapshot_path + '/code'):
-        shutil.rmtree(snapshot_path + '/code')
-    shutil.copytree('.', snapshot_path + '/code', shutil.ignore_patterns(['.git','__pycache__']))
-
+    if os.path.exists(args.save):
+        shutil.rmtree(args.save)
+    os.makedirs(args.save, exist_ok=True)
+    snapshot_path = args.save
     logging.basicConfig(filename=snapshot_path+"/log.txt", level=logging.INFO,
                         format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
@@ -247,3 +251,6 @@ if __name__ == "__main__":
     torch.save(net.state_dict(), save_mode_path)
     logging.info("save model to {}".format(save_mode_path))
     writer.close()
+
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,7 @@ import os
 import argparse
 import torch
 from networks.vnet import VNet
-from test_util import test_all_case
+from utils.test_util import test_all_case
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
