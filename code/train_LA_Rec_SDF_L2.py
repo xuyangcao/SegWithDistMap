@@ -17,27 +17,31 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 
-from networks.vnet import VNet
-from dataloaders.livertumor import LiverTumor, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
-
+from networks.vnet_rec import VNetRec
+from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
 from scipy.ndimage import distance_transform_edt as distance
 from skimage import segmentation as skimage_seg
 
-# Liver CT segmentation with boundary loss
+"""
+Adding reconstruction branch to V-Net
+Ref:
+A Distance Map Regularized CNN for Cardiac Cine MR Image Segmentation
+https://arxiv.org/abs/1901.01238
+"""
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--root_path', type=str, default='../data/LITS', help='Name of Experiment')
-parser.add_argument('--exp', type=str,  default='vnet_lits_bd', help='model_name')
-parser.add_argument('--max_iterations', type=int,  default=50000, help='maximum epoch number to train')
+parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
+parser.add_argument('--exp', type=str,  default='vnet_dp_la_Rec_SDF_L2', help='model_name;dp:add dropout; Rec:reconstruction')
+parser.add_argument('--max_iterations', type=int,  default=10000, help='maximum epoch number to train')
 parser.add_argument('--batch_size', type=int, default=4, help='batch_size per gpu')
-parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
+parser.add_argument('--base_lr', type=float,  default=0.01, help='maximum epoch number to train')
 parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
 parser.add_argument('--seed', type=int,  default=2019, help='random seed')
 parser.add_argument('--gpu', type=str,  default='0', help='GPU to use')
 args = parser.parse_args()
 
 train_data_path = args.root_path
-snapshot_path = "../model_lits/" + args.exp + "/"
+snapshot_path = "../model_la/" + args.exp + "/"
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 batch_size = args.batch_size * len(args.gpu.split(','))
@@ -52,6 +56,8 @@ if args.deterministic:
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
 
+patch_size = (112, 112, 80)
+num_classes = 2
 
 def dice_loss(score, target):
     target = target.float()
@@ -63,24 +69,23 @@ def dice_loss(score, target):
     loss = 1 - loss
     return loss
 
-def compute_sdf1_1(img_gt, out_shape):
+def compute_sdf(img_gt, out_shape):
     """
-    compute the normalized signed distance map of binary mask
-    input: segmentation, shape = (batch_size, x, y, z)
+    compute the signed distance map of binary mask
+    input: segmentation, shape = (batch_size,c, x, y, z)
     output: the Signed Distance Map (SDM) 
     sdf(x) = 0; x in segmentation boundary
              -inf|x-y|; x in segmentation
              +inf|x-y|; x out of segmentation
-    normalize sdf to [-1, 1]
+    normalize sdf to [-1,1]
+
     """
 
     img_gt = img_gt.astype(np.uint8)
-
     normalized_sdf = np.zeros(out_shape)
 
     for b in range(out_shape[0]): # batch size
-            # ignore background
-        for c in range(1, out_shape[1]):
+        for c in range(out_shape[1]):
             posmask = img_gt[b].astype(np.bool)
             if posmask.any():
                 negmask = ~posmask
@@ -90,54 +95,10 @@ def compute_sdf1_1(img_gt, out_shape):
                 sdf = (negdis-np.min(negdis))/(np.max(negdis)-np.min(negdis)) - (posdis-np.min(posdis))/(np.max(posdis)-np.min(posdis))
                 sdf[boundary==1] = 0
                 normalized_sdf[b][c] = sdf
+                assert np.min(sdf) == -1.0, print(np.min(posdis), np.max(posdis), np.min(negdis), np.max(negdis))
+                assert np.max(sdf) ==  1.0, print(np.min(posdis), np.min(negdis), np.max(posdis), np.max(negdis))
 
     return normalized_sdf
-
-def compute_sdf(img_gt, out_shape):
-    """
-    compute the signed distance map of binary mask
-    input: segmentation, shape = (batch_size, x, y, z)
-    output: the Signed Distance Map (SDM) 
-    sdf(x) = 0; x in segmentation boundary
-             -inf|x-y|; x in segmentation
-             +inf|x-y|; x out of segmentation
-    """
-
-    img_gt = img_gt.astype(np.uint8)
-
-    gt_sdf = np.zeros(out_shape)
-
-    for b in range(out_shape[0]): # batch size
-        for c in range(1, out_shape[1]):
-            posmask = img_gt[b].astype(np.bool)
-            if posmask.any():
-                negmask = ~posmask
-                posdis = distance(posmask)
-                negdis = distance(negmask)
-                boundary = skimage_seg.find_boundaries(posmask, mode='inner').astype(np.uint8)
-                sdf = negdis - posdis
-                sdf[boundary==1] = 0
-                gt_sdf[b][c] = sdf
-
-    return gt_sdf
-
-def boundary_loss(outputs_soft, gt_sdf):
-    """
-    compute boundary loss for binary segmentation
-    input: outputs_soft: sigmoid results,  shape=(b,2,x,y,z)
-           gt_sdf: sdf of ground truth (can be original or normalized sdf); shape=(b,2,x,y,z)
-    output: boundary_loss; sclar
-    """
-    pc = outputs_soft[:,1,...]
-    dc = gt_sdf[:,1,...]
-    multipled = torch.einsum('bxyz, bxyz->bxyz', pc, dc)
-    bd_loss = multipled.mean()
-
-    return bd_loss
-
-
-patch_size = (96, 128, 160)
-num_classes = 2
 
 if __name__ == "__main__":
     ## make logger file
@@ -152,17 +113,17 @@ if __name__ == "__main__":
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
 
-    net = VNet(n_channels=1, n_classes=num_classes, normalization='batchnorm', has_dropout=False)
+    net = VNetRec(n_channels=1, n_classes=num_classes, normalization='batchnorm', has_dropout=True)
     net = net.cuda()
 
-    db_train = LiverTumor(base_dir=train_data_path,
+    db_train = LAHeart(base_dir=train_data_path,
                        split='train',
+                       num=16,
                        transform = transforms.Compose([
                           RandomRotFlip(),
                           RandomCrop(patch_size),
                           ToTensor(),
                           ]))
-
 
     def worker_init_fn(worker_id):
         random.seed(args.seed+worker_id)
@@ -171,39 +132,33 @@ if __name__ == "__main__":
     net.train()
     optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
 
-    writer = SummaryWriter(snapshot_path+'/log', flush_secs=2)
+    writer = SummaryWriter(snapshot_path+'/log',  flush_secs=2)
     logging.info("{} itertations per epoch".format(len(trainloader)))
 
     iter_num = 0
-    alpha = 1.0
     max_epoch = max_iterations//len(trainloader)+1
     lr_ = base_lr
     net.train()
     for epoch_num in tqdm(range(max_epoch), ncols=70):
-        time1 = time.time()
         for i_batch, sampled_batch in enumerate(trainloader):
-            time2 = time.time()
-            # print('fetch data cost {}'.format(time2-time1))
+            # generate paired iput
             volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
-            outputs = net(volume_batch)
+            outputs, out_dis = net(volume_batch)
+            out_dis = torch.tanh(out_dis)
 
+            with torch.no_grad():
+                gt_dis = compute_sdf(label_batch.cpu().numpy(), out_dis.shape)
+                gt_dis = torch.from_numpy(gt_dis).float().cuda()
+
+            # compute CE + Dice loss
             loss_ce = F.cross_entropy(outputs, label_batch)
             outputs_soft = F.softmax(outputs, dim=1)
-            loss_seg_dice = dice_loss(outputs_soft[:, 1, :, :, :], label_batch == 1)
-            # compute gt_signed distance function and boundary loss
-            with torch.no_grad():
-                # defalut using compute_sdf; however, compute_sdf1_1 is also worth to try;
-                gt_sdf_npy = compute_sdf1_1(label_batch.cpu().numpy(), outputs_soft.shape)
-                gt_sdf = torch.from_numpy(gt_sdf_npy).float().cuda(outputs_soft.device.index)
-                # show signed distance map for debug
-                # import matplotlib.pyplot as plt 
-                # plt.figure()
-                # plt.subplot(121), plt.imshow(gt_sdf_npy[0,1,:,:,40]), plt.colorbar()
-                # plt.subplot(122), plt.imshow(np.uint8(label_batch.cpu().numpy()[0,:,:,40]>0)), plt.colorbar()
-                # plt.show()
-            loss_boundary = boundary_loss(outputs_soft, gt_sdf)
-            loss = alpha*(loss_ce+loss_seg_dice) + (1 - alpha) * loss_boundary
+            loss_dice = dice_loss(outputs_soft[:, 1, :, :, :], label_batch == 1)
+            # compute L2 Loss
+            loss_dist = F.mse_loss(out_dis, gt_dis)
+
+            loss = loss_ce + loss_dice + loss_dist
 
             optimizer.zero_grad()
             loss.backward()
@@ -212,34 +167,36 @@ if __name__ == "__main__":
             iter_num = iter_num + 1
             writer.add_scalar('lr', lr_, iter_num)
             writer.add_scalar('loss/loss_ce', loss_ce, iter_num)
-            writer.add_scalar('loss/loss_seg_dice', loss_seg_dice, iter_num)
-            writer.add_scalar('loss/loss_boundary', loss_boundary, iter_num)
+            writer.add_scalar('loss/loss_dice', loss_dice, iter_num)
+            writer.add_scalar('loss/loss_dist', loss_dist, iter_num)
             writer.add_scalar('loss/loss', loss, iter_num)
-            writer.add_scalar('loss/alpha', alpha, iter_num)
-            logging.info('iteration %d : alpha : %f' % (iter_num, alpha))
-            logging.info('iteration %d : loss_seg_dice : %f' % (iter_num, loss_seg_dice.item()))
-            logging.info('iteration %d : loss_boundary : %f' % (iter_num, loss_boundary.item()))
+            logging.info('iteration %d : loss_dist : %f' % (iter_num, loss_dist.item()))
+            logging.info('iteration %d : loss_dice : %f' % (iter_num, loss_dice.item()))
             logging.info('iteration %d : loss : %f' % (iter_num, loss.item()))
             if iter_num % 2 == 0:
-                image = volume_batch[0, 0:1, 30:71:10, :, :].permute(1, 0, 2, 3).repeat(1,3,1,1)
+                image = volume_batch[0, 0:1, :, :, 20:61:10].permute(3,0,1,2).repeat(1,3,1,1)
                 grid_image = make_grid(image, 5, normalize=True)
                 writer.add_image('train/Image', grid_image, iter_num)
 
                 outputs_soft = F.softmax(outputs, 1)
-                image = outputs_soft[0, 1:2, 30:71:10, :, :].permute(1, 0, 2, 3).repeat(1, 3, 1, 1)
+                image = outputs_soft[0, 1:2, :, :, 20:61:10].permute(3, 0, 1, 2).repeat(1, 3, 1, 1)
                 grid_image = make_grid(image, 5, normalize=False)
                 writer.add_image('train/Predicted_label', grid_image, iter_num)
 
-                image = label_batch[0, 30:71:10, :, :].unsqueeze(0).permute(1, 0, 2, 3).repeat(1, 3, 1, 1)
+                image = label_batch[0, :, :, 20:61:10].unsqueeze(0).permute(3, 0, 1, 2).repeat(1, 3, 1, 1)
                 grid_image = make_grid(image, 5, normalize=False)
                 writer.add_image('train/Groundtruth_label', grid_image, iter_num)
 
-                image = gt_sdf[0, 1:2, 30:71:10, :, :].permute(1, 0, 2, 3).repeat(1, 3, 1, 1)
-                grid_image = make_grid(image, 5, normalize=True)
-                writer.add_image('train/gt_sdf', grid_image, iter_num)
+                out_dis_slice = out_dis[0, 0, :, :, 20:61:10].unsqueeze(0).permute(3, 0, 1, 2).repeat(1, 3, 1, 1)
+                grid_image = make_grid(out_dis_slice, 5, normalize=False)
+                writer.add_image('train/out_dis_map', grid_image, iter_num)
+
+                gt_dis_slice = gt_dis[0, 0,:, :, 20:61:10].unsqueeze(0).permute(3, 0, 1, 2).repeat(1, 3, 1, 1)
+                grid_image = make_grid(gt_dis_slice, 5, normalize=False)
+                writer.add_image('train/gt_dis_map', grid_image, iter_num)
             ## change lr
             if iter_num % 2500 == 0:
-                lr_ = base_lr * 0.1 ** (iter_num // 2500)
+                lr_ = base_lr * 0.1 ** (iter_num // 1000)
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr_
             if iter_num % 1000 == 0:
@@ -250,9 +207,6 @@ if __name__ == "__main__":
             if iter_num > max_iterations:
                 break
             time1 = time.time()
-        alpha -= 0.01
-        if alpha <= 0.01:
-            alpha = 0.01
         if iter_num > max_iterations:
             break
     save_mode_path = os.path.join(snapshot_path, 'iter_'+str(max_iterations+1)+'.pth')

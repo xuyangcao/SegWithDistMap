@@ -75,7 +75,7 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
     score_map = score_map/np.expand_dims(cnt,axis=0)
     #label_map = np.argmax(score_map, axis = 0)
     label_map = score_map[1]
-    label_map[label_map > 0.2] = 1
+    label_map[label_map > 0.3] = 1
     label_map[label_map != 1] = 0
     print('label_max:', label_map.max())
 
@@ -152,7 +152,7 @@ def test_calculate_metric(args):
     net.eval()
 
     avg_metric = test_all_case(net, args.testloader, num_classes=args.num_classes,
-                               patch_size=(128, 128, 128), stride_xy=18, stride_z=4,
+                               patch_size=(128, 64, 128), stride_xy=18, stride_z=4,
                                save_result=True, test_save_path=args.test_save_path)
 
     return avg_metric
@@ -160,11 +160,11 @@ def test_calculate_metric(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root_path', type=str, default='../data/abus_data2/', help='data root path')
-    parser.add_argument('--snapshot_path', type=str, default='../work/abus/test-dice-ce-data-128-3/', help='snapshot path')
-    parser.add_argument('--test_save_path', type=str, default='./results/abus/test_dice_ce_data-128', help='save path')
+    parser.add_argument('--root_path', type=str, default='../data/abus_data/', help='data root path')
+    parser.add_argument('--snapshot_path', type=str, default='../work/abus/1225-dice-ce-abus-ori/', help='snapshot path')
+    parser.add_argument('--test_save_path', type=str, default='./results/abus/ori', help='save path')
     parser.add_argument('--num_classes', type=int, default=2, help='number of classes')
-    parser.add_argument('--start_epoch', type=int, default=46000)
+    parser.add_argument('--start_epoch', type=int, default=50000)
     args = parser.parse_args()
 
     if not os.path.exists(args.test_save_path):
