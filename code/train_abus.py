@@ -8,6 +8,8 @@ import logging
 import time
 import random
 import numpy as np
+import matplotlib.pyplot as plt
+plt.switch_backend('agg')
 
 import torch
 import torch.optim as optim
@@ -19,14 +21,17 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
 from networks.vnet import VNet
+from dataloaders.abus import ABUS, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler 
 from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
-from utils.losses import dice_loss
+from utils.losses import dice_loss, GeneralizedDiceLoss
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
+    #parser.add_argument('--root_path', type=str, default='../data/abus_roi/', help='Name of Experiment')
+    parser.add_argument('--root_path', type=str, default='../data/abus_data/', help='Name of Experiment')
+    #parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
 
-    parser.add_argument('--max_iterations', type=int,  default=6000, help='maximum epoch number to train')
+    parser.add_argument('--max_iterations', type=int,  default=50000, help='maximum epoch number to train')
     parser.add_argument('--batch_size', type=int, default=6, help='batch_size per gpu')
     parser.add_argument('--ngpu', type=int, default=1)
     parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
@@ -34,8 +39,8 @@ def get_args():
     parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
     parser.add_argument('--seed', type=int,  default=2019, help='random seed')
 
-    parser.add_argument('--save', type=str, default='../work/la_heart/test')
-    parser.add_argument('--writer_dir', type=str, default='../log/la_heart/')
+    parser.add_argument('--save', type=str, default='../work/abus/test')
+    parser.add_argument('--writer_dir', type=str, default='../log/abus/')
     args = parser.parse_args()
 
     return args
@@ -56,8 +61,11 @@ def main():
     max_iterations = args.max_iterations
     base_lr = args.base_lr
 
-    patch_size = (112, 112, 80)
+    #patch_size = (112, 112, 112)
+    #patch_size = (160, 160, 160)
+    patch_size = (128, 128, 128)
     num_classes = 2
+
 
     # random
     if args.deterministic:
@@ -81,26 +89,24 @@ def main():
     net = VNet(n_channels=1, n_classes=num_classes, normalization='batchnorm', has_dropout=True)
     net = net.cuda()
 
-    db_train = LAHeart(base_dir=train_data_path,
+    #db_train = LAHeart(base_dir=train_data_path,
+    #                   split='train',
+    #                   transform = transforms.Compose([
+    #                      RandomRotFlip(),
+    #                      RandomCrop(patch_size),
+    #                      ToTensor(),
+    #                      ]))
+
+    db_train = ABUS(base_dir=args.root_path,
                        split='train',
-                       num=16,
-                       transform = transforms.Compose([
-                          RandomRotFlip(),
-                          RandomCrop(patch_size),
-                          ToTensor(),
-                          ]))
-    db_test = LAHeart(base_dir=train_data_path,
-                       split='test',
-                       transform = transforms.Compose([
-                           CenterCrop(patch_size),
-                           ToTensor()
-                       ]))
+                       transform = transforms.Compose([ RandomRotFlip(), RandomCrop(patch_size), ToTensor()]))
     def worker_init_fn(worker_id):
         random.seed(args.seed+worker_id)
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,  num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn)
 
     net.train()
     optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
+    gdl = GeneralizedDiceLoss()
 
     logging.info("{} itertations per epoch".format(len(trainloader)))
 
@@ -116,35 +122,56 @@ def main():
             volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
             outputs = net(volume_batch)
+            #print('volume_batch.shape: ', volume_batch.shape)
+            #print('outputs.shape, ', outputs.shape)
 
             loss_seg = F.cross_entropy(outputs, label_batch)
             outputs_soft = F.softmax(outputs, dim=1)
+            #print(outputs_soft.shape)
+            #print(label_batch.shape)
+            #loss_seg_dice = gdl(outputs_soft, label_batch)
             loss_seg_dice = dice_loss(outputs_soft[:, 1, :, :, :], label_batch == 1)
-            loss = 0.5*(loss_seg+loss_seg_dice)
+            loss = 0.01 * loss_seg + 0.99 * loss_seg_dice
+            #loss = loss_seg_dice
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            out = outputs_soft.max(1)[1]
+            dice = GeneralizedDiceLoss.dice_coeficient(out, label_batch)
+
             iter_num = iter_num + 1
-            writer.add_scalar('lr', lr_, iter_num)
-            writer.add_scalar('loss/loss_seg', loss_seg, iter_num)
-            writer.add_scalar('loss/loss_seg_dice', loss_seg_dice, iter_num)
-            writer.add_scalar('loss/loss', loss, iter_num)
+            writer.add_scalar('train/lr', lr_, iter_num)
+            writer.add_scalar('train/loss_seg', 0.01*loss_seg, iter_num)
+            writer.add_scalar('train/loss_seg_dice', 0.99*loss_seg_dice, iter_num)
+            writer.add_scalar('train/loss', loss, iter_num)
+            writer.add_scalar('train/dice', dice, iter_num)
             logging.info('iteration %d : loss : %f' % (iter_num, loss.item()))
+
             if iter_num % 50 == 0:
-                image = volume_batch[0, 0:1, :, :, 20:61:10].permute(3,0,1,2).repeat(1,3,1,1)
-                grid_image = make_grid(image, 5, normalize=True)
+                image = volume_batch[0, 0:1, 30:71:10, :, :].permute(1,0,2,3)
+                image = (image + 0.5) * 0.5
+                grid_image = make_grid(image, 5)
                 writer.add_image('train/Image', grid_image, iter_num)
 
-                outputs_soft = F.softmax(outputs, 1)
-                image = outputs_soft[0, 1:2, :, :, 20:61:10].permute(3, 0, 1, 2).repeat(1, 3, 1, 1)
+                #outputs_soft = F.softmax(outputs, 1) #batchsize x num_classes x w x h x d
+                image = outputs_soft[0, 1:2, 30:71:10, :, :].permute(1,0,2,3)
                 grid_image = make_grid(image, 5, normalize=False)
-                writer.add_image('train/Predicted_label', grid_image, iter_num)
+                grid_image = grid_image.cpu().detach().numpy().transpose((1,2,0))
 
-                image = label_batch[0, :, :, 20:61:10].unsqueeze(0).permute(3, 0, 1, 2).repeat(1, 3, 1, 1)
-                grid_image = make_grid(image, 5, normalize=False)
-                writer.add_image('train/Groundtruth_label', grid_image, iter_num)
+                gt = label_batch[0, 30:71:10, :, :].unsqueeze(0).permute(1,0,2,3)
+                grid_gt = make_grid(gt, 5, normalize=False)
+                grid_gt = grid_gt.cpu().detach().numpy().transpose((1,2,0))
+
+                fig = plt.figure()
+                ax = fig.add_subplot(211)
+                ax.imshow(grid_gt[:, :, 0], 'gray')
+                ax = fig.add_subplot(212)
+                cs = ax.imshow(grid_image[:, :, 0], 'hot', vmin=0., vmax=1.)
+                fig.colorbar(cs, ax=ax, shrink=0.9)
+                writer.add_figure('train/Predicted_label', fig, iter_num)
+                fig.clear()
 
             ## change lr
             if iter_num % 2500 == 0:

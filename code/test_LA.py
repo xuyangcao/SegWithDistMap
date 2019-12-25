@@ -1,4 +1,5 @@
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 import argparse
 import torch
 from networks.vnet import VNet
@@ -6,13 +7,11 @@ from utils.test_util import test_all_case
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
-parser.add_argument('--model', type=str,  default='vnet_supervisedonly_dp', help='model_name')
 parser.add_argument('--gpu', type=str,  default='0', help='GPU to use')
 FLAGS = parser.parse_args()
 
-os.environ['CUDA_VISIBLE_DEVICES'] = FLAGS.gpu
-snapshot_path = "./work/la_heart/test-10-20/" 
-test_save_path = "./results/la_heart/"
+snapshot_path = '../work/la_heart/12-22-hausdorff-loss/'
+test_save_path = "./results/la_heart/hausdorff-loss"
 if not os.path.exists(test_save_path):
     os.makedirs(test_save_path)
 
@@ -38,5 +37,5 @@ def test_calculate_metric(epoch_num):
 
 
 if __name__ == '__main__':
-    metric = test_calculate_metric(2000)
+    metric = test_calculate_metric(5000)
     # print(metric)

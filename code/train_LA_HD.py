@@ -161,7 +161,6 @@ def main():
     net.train()
     optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
 
-    writer = SummaryWriter(snapshot_path+'/log', flush_secs=2)
     logging.info("{} itertations per epoch".format(len(trainloader)))
 
     iter_num = 0

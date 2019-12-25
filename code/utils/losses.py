@@ -1,9 +1,52 @@
 import torch
+import torch.nn as nn
 from torch.nn import functional as F
 import numpy as np
 from scipy.ndimage import distance_transform_edt as distance
 from skimage import segmentation as skimage_seg
 
+
+class GeneralizedDiceLoss(nn.Module):
+    # generalized Dice Loss
+    def __init__(self):
+        super(GeneralizedDiceLoss, self).__init__()
+
+    def forward(self, pre, gt):
+        num_classes = pre.shape[1]
+        # get one hot ground truth
+        gt = gt.long()
+        gt_one_hot = torch.eye(num_classes)[gt.squeeze(1)] # [1, 128, 128, 128, 2]
+        #print('gt_one_hot.shape: ', gt_one_hot.shape)
+        #print('pre.shapre: ', pre.shape)
+        gt_one_hot = gt_one_hot.permute(0, 4, 1, 2, 3).float() # [1, 2, 128, 128, 128]
+        if gt.cuda:
+            gt_one_hot = gt_one_hot.cuda()
+        pre = pre.float()
+
+        # dice loss
+        eps = 1e-6
+        dims = (0,) + tuple(range(2, gt.ndimension())) # (0, 2, 3, 4)
+        intersection = torch.sum(pre * gt_one_hot, dims)
+        cardinality = torch.sum(pre + gt_one_hot, dims)
+        dice = (2. * intersection / (cardinality + eps)).mean()
+        loss = 1. - dice
+
+        return loss
+
+    @staticmethod
+    def dice_coeficient(output, target):
+        output = output.float()
+        target = target.float()
+        
+        output = output
+        smooth = 1e-20
+        iflat = output.view(-1)
+        tflat = target.view(-1)
+        
+        intersection = torch.dot(iflat, tflat)
+        dice = (2. * intersection + smooth) / (iflat.sum() + tflat.sum() + smooth)
+
+        return dice 
 
 def dice_loss(score, target):
     target = target.float()
