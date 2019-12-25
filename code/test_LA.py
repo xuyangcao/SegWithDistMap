@@ -8,6 +8,7 @@ from utils.test_util import test_all_case
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
 parser.add_argument('--gpu', type=str,  default='0', help='GPU to use')
+parser.add_argument('--epoch_num', type=int,  default='6000', help='checkpoint to use')
 FLAGS = parser.parse_args()
 
 snapshot_path = '../work/la_heart/12-22-hausdorff-loss/'
