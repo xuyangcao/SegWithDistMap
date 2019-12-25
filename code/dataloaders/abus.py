@@ -7,6 +7,7 @@ import h5py
 import itertools
 from torch.utils.data.sampler import Sampler
 import SimpleITK as sitk
+import random 
 
 
 class ABUS(Dataset):
@@ -20,7 +21,7 @@ class ABUS(Dataset):
             with open(self._base_dir+'/../abus_train.list', 'r') as f:
                 self.image_list = f.readlines()
         elif split == 'test':
-            with open(self._base_dir+'/../abus_train.list', 'r') as f:
+            with open(self._base_dir+'/../abus_test.list', 'r') as f:
                 self.image_list = f.readlines()
         self.image_list = [item.replace('\n','') for item in self.image_list]
         if num is not None:
@@ -34,9 +35,10 @@ class ABUS(Dataset):
         image_name = self.image_list[idx]
         image = self.load_img('image/'+image_name, is_normalize=True)
         label = self.load_img('label/'+image_name)
-        label[label!=0] = 1.
+        label[label!=0] = 1
 
         sample = {'image': image, 'label': label}
+        #print('image.shape', image.shape)
         if self.transform:
             sample = self.transform(sample)
         
@@ -49,8 +51,9 @@ class ABUS(Dataset):
         filename = os.path.join(self._base_dir, image_name)
         itk_img = sitk.ReadImage(filename)
         image = sitk.GetArrayFromImage(itk_img)
-        image = np.transpose(image, (1,2,0))
+        #image = np.transpose(image, (1,2,0))
         image = image.astype(np.float32)
+        #print('image.shape: ', image.shape)
 
         if is_normalize:
             #print('image.max ', image.max())
@@ -130,15 +133,20 @@ class RandomRotFlip(object):
     Args:
     output_size (int): Desired output size
     """
+    def __init__(self, probability=0.6):
+        self.probability = probability
 
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
-        k = np.random.randint(0, 4)
-        image = np.rot90(image, k)
-        label = np.rot90(label, k)
-        axis = np.random.randint(0, 2)
-        image = np.flip(image, axis=axis).copy()
-        label = np.flip(label, axis=axis).copy()
+
+        if round(np.random.uniform(0,1),1) <= self.probability:
+            k = random.choices([2,4],k=1)
+            k = k[0]
+            image = np.rot90(image, k)
+            label = np.rot90(label, k)
+            axis = np.random.randint(0, 2)
+            image = np.flip(image, axis=axis).copy()
+            label = np.flip(label, axis=axis).copy()
 
         return {'image': image, 'label': label}
 

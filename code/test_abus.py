@@ -21,6 +21,7 @@ from dataloaders.abus import ABUS, RandomCrop, CenterCrop, RandomRotFlip, ToTens
 
 def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1):
     w, h, d = image.shape
+    #print(image.shape)
 
     # if the size of image is less than patch_size, then padding it
     add_pad = False
@@ -62,6 +63,7 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
                 test_patch = image[xs:xs+patch_size[0], ys:ys+patch_size[1], zs:zs+patch_size[2]]
                 test_patch = np.expand_dims(np.expand_dims(test_patch,axis=0),axis=0).astype(np.float32)
                 test_patch = torch.from_numpy(test_patch).cuda()
+                #print('test_patch.shape: ', test_patch.shape)
                 y1 = net(test_patch)
                 y = F.softmax(y1, dim=1)
                 y = y.cpu().data.numpy()
@@ -71,8 +73,12 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
                 cnt[xs:xs+patch_size[0], ys:ys+patch_size[1], zs:zs+patch_size[2]] \
                   = cnt[xs:xs+patch_size[0], ys:ys+patch_size[1], zs:zs+patch_size[2]] + 1
     score_map = score_map/np.expand_dims(cnt,axis=0)
-    label_map = np.argmax(score_map, axis = 0)
-    #label_map = score_map
+    #label_map = np.argmax(score_map, axis = 0)
+    label_map = score_map[1]
+    label_map[label_map > 0.2] = 1
+    label_map[label_map != 1] = 0
+    print('label_max:', label_map.max())
+
     if add_pad:
         label_map = label_map[wl_pad:wl_pad+w,hl_pad:hl_pad+h,dl_pad:dl_pad+d]
         score_map = score_map[:,wl_pad:wl_pad+w,hl_pad:hl_pad+h,dl_pad:dl_pad+d]
@@ -87,7 +93,7 @@ def calculate_metric_percase(pred, gt):
 
     return dice, jc, hd, asd
 
-def test_all_case(net, testloader, num_classes, patch_size=(112, 112, 80), stride_xy=18, stride_z=4, save_result=True, test_save_path=None, preproc_fn=None):
+def test_all_case(net, testloader, num_classes, patch_size, stride_xy=18, stride_z=4, save_result=True, test_save_path=None, preproc_fn=None):
     total_metric = 0.0
     metric_dict = OrderedDict()
     metric_dict['name'] = list()
@@ -146,7 +152,7 @@ def test_calculate_metric(args):
     net.eval()
 
     avg_metric = test_all_case(net, args.testloader, num_classes=args.num_classes,
-                               patch_size=(112, 112, 80), stride_xy=18, stride_z=4,
+                               patch_size=(128, 128, 128), stride_xy=18, stride_z=4,
                                save_result=True, test_save_path=args.test_save_path)
 
     return avg_metric
@@ -154,11 +160,11 @@ def test_calculate_metric(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root_path', type=str, default='../data/abus_data/', help='data root path')
-    parser.add_argument('--snapshot_path', type=str, default='../work/abus/test-dice-ce-data/', help='snapshot path')
-    parser.add_argument('--test_save_path', type=str, default='./results/abus/test_dice_ce_data', help='save path')
+    parser.add_argument('--root_path', type=str, default='../data/abus_data2/', help='data root path')
+    parser.add_argument('--snapshot_path', type=str, default='../work/abus/test-dice-ce-data-128-3/', help='snapshot path')
+    parser.add_argument('--test_save_path', type=str, default='./results/abus/test_dice_ce_data-128', help='save path')
     parser.add_argument('--num_classes', type=int, default=2, help='number of classes')
-    parser.add_argument('--start_epoch', type=int, default=16000)
+    parser.add_argument('--start_epoch', type=int, default=46000)
     args = parser.parse_args()
 
     if not os.path.exists(args.test_save_path):

@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import sys
 from tqdm import tqdm
 import shutil
@@ -22,7 +22,7 @@ from torchvision.utils import make_grid
 
 from networks.vnet import VNet
 from dataloaders.abus import ABUS, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler 
-from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
+#from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
 from utils.losses import dice_loss, GeneralizedDiceLoss
 
 def get_args():
@@ -32,7 +32,7 @@ def get_args():
     #parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
 
     parser.add_argument('--max_iterations', type=int,  default=50000, help='maximum epoch number to train')
-    parser.add_argument('--batch_size', type=int, default=6, help='batch_size per gpu')
+    parser.add_argument('--batch_size', type=int, default=4, help='batch_size per gpu')
     parser.add_argument('--ngpu', type=int, default=1)
     parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
 
@@ -63,7 +63,7 @@ def main():
 
     #patch_size = (112, 112, 112)
     #patch_size = (160, 160, 160)
-    patch_size = (128, 128, 128)
+    patch_size = (128, 64, 128)
     num_classes = 2
 
 
@@ -121,6 +121,7 @@ def main():
             # print('fetch data cost {}'.format(time2-time1))
             volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
+            #print('volume_batch.shape: ', volume_batch.shape)
             outputs = net(volume_batch)
             #print('volume_batch.shape: ', volume_batch.shape)
             #print('outputs.shape, ', outputs.shape)
@@ -150,17 +151,17 @@ def main():
             logging.info('iteration %d : loss : %f' % (iter_num, loss.item()))
 
             if iter_num % 50 == 0:
-                image = volume_batch[0, 0:1, 30:71:10, :, :].permute(1,0,2,3)
+                image = volume_batch[0, 0:1, :, 30:71:10, :].permute(2,0,1,3)
                 image = (image + 0.5) * 0.5
                 grid_image = make_grid(image, 5)
                 writer.add_image('train/Image', grid_image, iter_num)
 
                 #outputs_soft = F.softmax(outputs, 1) #batchsize x num_classes x w x h x d
-                image = outputs_soft[0, 1:2, 30:71:10, :, :].permute(1,0,2,3)
+                image = outputs_soft[0, 1:2, :, 30:71:10, :].permute(2,0,1,3)
                 grid_image = make_grid(image, 5, normalize=False)
                 grid_image = grid_image.cpu().detach().numpy().transpose((1,2,0))
 
-                gt = label_batch[0, 30:71:10, :, :].unsqueeze(0).permute(1,0,2,3)
+                gt = label_batch[0, :, 30:71:10, :].unsqueeze(0).permute(2,0,1,3)
                 grid_gt = make_grid(gt, 5, normalize=False)
                 grid_gt = grid_gt.cpu().detach().numpy().transpose((1,2,0))
 

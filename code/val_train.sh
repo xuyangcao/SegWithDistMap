@@ -1,4 +1,6 @@
-python train_abus.py --save ../work/abus/test-dice-ce-data-128-3 --batch_size 3
+python train_abus.py --save ../work/abus/1225-dice-ce-abus-ori --batch_size 4
+
+#python train_abus.py --save ../work/abus/test-dice-ce-data-128-3 --batch_size 3
 #python train_abus.py --save ../work/abus/test-dice-ce-data-0.99 --batch_size 4
 #python train_abus.py --save ../work/abus/test-dice-ce-data --batch_size 4
 #python train_abus.py --save ../work/abus/test-dice-ce-roi --batch_size 4
