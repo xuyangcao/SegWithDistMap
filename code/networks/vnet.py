@@ -143,7 +143,7 @@ class Upsampling(nn.Module):
 
 
 class VNet(nn.Module):
-    def __init__(self, n_channels=3, n_classes=2, n_filters=16, normalization='none', has_dropout=False):
+    def __init__(self, n_channels=3, n_classes=2, n_filters=16, normalization='none', has_dropout=False, use_tm=False):
         super(VNet, self).__init__()
         self.has_dropout = has_dropout
 
@@ -173,8 +173,10 @@ class VNet(nn.Module):
 
         self.block_nine = ConvBlock(1, n_filters, n_filters, normalization=normalization)
         self.out_conv = nn.Conv3d(n_filters, n_classes, 1, padding=0)
+        self.tm_layer = nn.Conv3d(n_filters, 1, 1, padding=0)
 
         self.dropout = nn.Dropout3d(p=0.5, inplace=False)
+        self.use_tm = use_tm
         # self.__init_weight()
 
     def encoder(self, input):
@@ -225,7 +227,11 @@ class VNet(nn.Module):
         if self.has_dropout:
             x9 = self.dropout(x9)
         out = self.out_conv(x9)
-        return out
+        if self.use_tm:
+            tm = self.tm_layer(x9)
+            return out, tm
+        else:
+            return out
 
 
     def forward(self, input, turnoff_drop=False):
@@ -233,10 +239,16 @@ class VNet(nn.Module):
             has_dropout = self.has_dropout
             self.has_dropout = False
         features = self.encoder(input)
-        out = self.decoder(features)
-        if turnoff_drop:
-            self.has_dropout = has_dropout
-        return out
+        if not self.use_tm:
+            out = self.decoder(features)
+            if turnoff_drop:
+                self.has_dropout = has_dropout
+            return out
+        else:
+            out, tm = self.decoder(features)
+            if turnoff_drop:
+                self.has_dropout = has_dropout
+            return out, tm
 
     # def __init_weight(self):
     #     for m in self.modules():

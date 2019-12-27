@@ -10,7 +10,7 @@ if __name__ == "__main__":
 
     random.seed(2109)
 
-    filenames = os.listdir('./image/')
+    filenames = os.listdir('./abus_data/image/')
     filenames.sort()
     #print(len(filenames))
 
@@ -22,8 +22,8 @@ if __name__ == "__main__":
     #print(patient_id)
     #print(len(patient_id))
 
-    train_id = patient_id[:60]
-    test_id = patient_id[60:]
+    test_id = patient_id[:20]
+    train_id = patient_id[20:]
     print('train_patients: ', len(train_id))
     print('test_patients: ', len(test_id))
     print('train_patients: ', train_id)

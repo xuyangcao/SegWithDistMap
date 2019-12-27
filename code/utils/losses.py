@@ -48,6 +48,18 @@ class GeneralizedDiceLoss(nn.Module):
 
         return dice 
 
+def threshold_loss(pred, threshold_map, target):
+    scalar = -torch.exp(torch.tensor([10.])) 
+    scalar = scalar.cuda()
+    temp = pred.clone()
+    temp[pred < threshold_map] = scalar
+    #mask = pred > threshold_map
+    #mask = mask.float()
+    mask = torch.sigmoid(temp)
+    loss = dice_loss(mask, target)
+
+    return loss
+
 def dice_loss(score, target):
     target = target.float()
     smooth = 1e-5

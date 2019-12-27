@@ -23,7 +23,7 @@ from torchvision.utils import make_grid
 from networks.vnet import VNet
 from dataloaders.abus import ABUS, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler 
 #from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
-from utils.losses import dice_loss, GeneralizedDiceLoss
+from utils.losses import dice_loss, GeneralizedDiceLoss, threshold_loss
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -32,12 +32,13 @@ def get_args():
     #parser.add_argument('--root_path', type=str, default='../data/2018LA_Seg_Training Set/', help='Name of Experiment')
 
     parser.add_argument('--max_iterations', type=int,  default=50000, help='maximum epoch number to train')
-    parser.add_argument('--batch_size', type=int, default=4, help='batch_size per gpu')
+    parser.add_argument('--batch_size', type=int, default=5, help='batch_size per gpu')
     parser.add_argument('--ngpu', type=int, default=1)
     parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
 
     parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
     parser.add_argument('--seed', type=int,  default=2019, help='random seed')
+    parser.add_argument('--use_tm', action='store_true', default=True, help='whether use threshold_map')
 
     parser.add_argument('--save', type=str, default='../work/abus/test')
     parser.add_argument('--writer_dir', type=str, default='../log/abus/')
@@ -86,7 +87,7 @@ def main():
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info(str(args))
 
-    net = VNet(n_channels=1, n_classes=num_classes, normalization='batchnorm', has_dropout=True)
+    net = VNet(n_channels=1, n_classes=num_classes, normalization='batchnorm', has_dropout=True, use_tm=args.use_tm)
     net = net.cuda()
 
     #db_train = LAHeart(base_dir=train_data_path,
@@ -122,7 +123,11 @@ def main():
             volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
             volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
             #print('volume_batch.shape: ', volume_batch.shape)
-            outputs = net(volume_batch)
+            if args.use_tm:
+                outputs, tm = net(volume_batch)
+                tm = torch.sigmoid(tm)
+            else:
+                outputs = net(volume_batch)
             #print('volume_batch.shape: ', volume_batch.shape)
             #print('outputs.shape, ', outputs.shape)
 
@@ -132,8 +137,12 @@ def main():
             #print(label_batch.shape)
             #loss_seg_dice = gdl(outputs_soft, label_batch)
             loss_seg_dice = dice_loss(outputs_soft[:, 1, :, :, :], label_batch == 1)
-            loss = 0.01 * loss_seg + 0.99 * loss_seg_dice
-            #loss = loss_seg_dice
+            if args.use_tm:
+                loss_threshold = threshold_loss(outputs_soft[:, 1, :, :, :], tm[:, 0, ...], label_batch == 1)
+                loss = (0.1 * loss_seg + 0.9 * loss_seg_dice) + 3 * loss_threshold
+                #loss = 0.1 * loss_seg + 0.9 * loss_threshold
+            else:
+                loss = 0.01 * loss_seg + 0.99 * loss_seg_dice
 
             optimizer.zero_grad()
             loss.backward()
@@ -144,10 +153,13 @@ def main():
 
             iter_num = iter_num + 1
             writer.add_scalar('train/lr', lr_, iter_num)
-            writer.add_scalar('train/loss_seg', 0.01*loss_seg, iter_num)
-            writer.add_scalar('train/loss_seg_dice', 0.99*loss_seg_dice, iter_num)
+            writer.add_scalar('train/loss_seg', loss_seg, iter_num)
+            writer.add_scalar('train/loss_seg_dice', loss_seg_dice, iter_num)
             writer.add_scalar('train/loss', loss, iter_num)
             writer.add_scalar('train/dice', dice, iter_num)
+            if args.use_tm:
+                writer.add_scalar('train/loss_threshold', loss_threshold, iter_num)
+
             logging.info('iteration %d : loss : %f' % (iter_num, loss.item()))
 
             if iter_num % 50 == 0:
@@ -165,13 +177,21 @@ def main():
                 grid_gt = make_grid(gt, 5, normalize=False)
                 grid_gt = grid_gt.cpu().detach().numpy().transpose((1,2,0))
 
+                image_tm = tm[0, :, :, 30:71:10, :].permute(2,0,1,3)
+                grid_tm = make_grid(image_tm, 5, normalize=False)
+                grid_tm = grid_tm.cpu().detach().numpy().transpose((1,2,0))
+
+
                 fig = plt.figure()
-                ax = fig.add_subplot(211)
+                ax = fig.add_subplot(311)
                 ax.imshow(grid_gt[:, :, 0], 'gray')
-                ax = fig.add_subplot(212)
+                ax = fig.add_subplot(312)
                 cs = ax.imshow(grid_image[:, :, 0], 'hot', vmin=0., vmax=1.)
                 fig.colorbar(cs, ax=ax, shrink=0.9)
-                writer.add_figure('train/Predicted_label', fig, iter_num)
+                ax = fig.add_subplot(313)
+                cs = ax.imshow(grid_tm[:, :, 0], 'hot', vmin=0, vmax=1.)
+                fig.colorbar(cs, ax=ax, shrink=0.9)
+                writer.add_figure('train/prediction_results', fig, iter_num)
                 fig.clear()
 
             ## change lr

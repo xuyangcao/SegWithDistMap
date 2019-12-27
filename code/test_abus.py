@@ -75,7 +75,7 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
     score_map = score_map/np.expand_dims(cnt,axis=0)
     #label_map = np.argmax(score_map, axis = 0)
     label_map = score_map[1]
-    label_map[label_map > 0.3] = 1
+    label_map[label_map > 0.2] = 1
     label_map[label_map != 1] = 0
     print('label_max:', label_map.max())
 
@@ -161,8 +161,8 @@ def test_calculate_metric(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_path', type=str, default='../data/abus_data/', help='data root path')
-    parser.add_argument('--snapshot_path', type=str, default='../work/abus/1225-dice-ce-abus-ori/', help='snapshot path')
-    parser.add_argument('--test_save_path', type=str, default='./results/abus/ori', help='save path')
+    parser.add_argument('--snapshot_path', type=str, default='../work/abus/1226-dice-ce-abus/', help='snapshot path')
+    parser.add_argument('--test_save_path', type=str, default='./results/abus/1226-dice', help='save path')
     parser.add_argument('--num_classes', type=int, default=2, help='number of classes')
     parser.add_argument('--start_epoch', type=int, default=50000)
     args = parser.parse_args()
