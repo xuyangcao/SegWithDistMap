@@ -64,8 +64,10 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
                 test_patch = np.expand_dims(np.expand_dims(test_patch,axis=0),axis=0).astype(np.float32)
                 test_patch = torch.from_numpy(test_patch).cuda()
                 #print('test_patch.shape: ', test_patch.shape)
-                y1 = net(test_patch)
-                y = F.softmax(y1, dim=1)
+                y1, tm = net(test_patch)
+                #y = F.softmax(y1, dim=1)
+                y = y1 > tm
+                y = y.float()
                 y = y.cpu().data.numpy()
                 y = y[0,:,:,:,:]
                 score_map[:, xs:xs+patch_size[0], ys:ys+patch_size[1], zs:zs+patch_size[2]] \
@@ -145,7 +147,7 @@ def test_all_case(net, testloader, num_classes, patch_size, stride_xy=18, stride
     return avg_metric
 
 def test_calculate_metric(args):
-    net = VNet(n_channels=1, n_classes=args.num_classes, normalization='batchnorm', has_dropout=False).cuda()
+    net = VNet(n_channels=1, n_classes=args.num_classes, normalization='batchnorm', has_dropout=False, use_tm=True).cuda()
     save_mode_path = os.path.join(args.snapshot_path, 'iter_' + str(args.start_epoch) + '.pth')
     net.load_state_dict(torch.load(save_mode_path))
     print("init weight from {}".format(save_mode_path))
@@ -161,8 +163,8 @@ def test_calculate_metric(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_path', type=str, default='../data/abus_data/', help='data root path')
-    parser.add_argument('--snapshot_path', type=str, default='../work/abus/1226-dice-ce-abus/', help='snapshot path')
-    parser.add_argument('--test_save_path', type=str, default='./results/abus/1226-dice', help='save path')
+    parser.add_argument('--snapshot_path', type=str, default='../work/abus/0104-ce-dice-th-abus/', help='snapshot path')
+    parser.add_argument('--test_save_path', type=str, default='./results/abus/01-04-dice-th', help='save path')
     parser.add_argument('--num_classes', type=int, default=2, help='number of classes')
     parser.add_argument('--start_epoch', type=int, default=50000)
     args = parser.parse_args()
