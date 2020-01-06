@@ -5,18 +5,23 @@ from glob import glob
 from torch.utils.data import Dataset
 import h5py
 import itertools
-from torch.utils.data.sampler import Sampler
 import SimpleITK as sitk
 import random 
+
+import torch
+from torch.utils.data.sampler import Sampler
+from torch.utils.data import DataLoader
+from torchvision import transforms
 
 
 class ABUS(Dataset):
     """ ABUS dataset """
-    def __init__(self, base_dir=None, split='train', num=None, transform=None):
+    def __init__(self, base_dir=None, split='train', num=None, use_dismap=False, transform=None):
         self._base_dir = base_dir
         self.transform = transform
         self.sample_list = []
         self.split = split
+        self.use_dismap = use_dismap 
         if split=='train':
             with open(self._base_dir+'/../abus_train.list', 'r') as f:
                 self.image_list = f.readlines()
@@ -36,8 +41,12 @@ class ABUS(Dataset):
         image = self.load_img('image/'+image_name, is_normalize=True)
         label = self.load_img('label/'+image_name)
         label[label!=0] = 1
+        if self.use_dismap:
+            dis_map = self.load_img('dis_map/'+image_name[:-3]+'nii.gz')
+            sample = {'image': image, 'label': label, 'dis_map': dis_map}
+        else:
+            sample = {'image': image, 'label': label}
 
-        sample = {'image': image, 'label': label}
         #print('image.shape', image.shape)
         if self.transform:
             sample = self.transform(sample)
@@ -64,11 +73,14 @@ class ABUS(Dataset):
         return image
 
 class CenterCrop(object):
-    def __init__(self, output_size):
+    def __init__(self, output_size, use_dismap=False):
         self.output_size = output_size
+        self.use_dismap = use_dismap
 
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
+        if self.use_dismap:
+            dis_map = sample['dis_map']
 
         # pad the sample if necessary
         if label.shape[0] <= self.output_size[0] or label.shape[1] <= self.output_size[1] or label.shape[2] <= \
@@ -78,6 +90,8 @@ class CenterCrop(object):
             pd = max((self.output_size[2] - label.shape[2]) // 2 + 3, 0)
             image = np.pad(image, [(pw, pw), (ph, ph), (pd, pd)], mode='constant', constant_values=0)
             label = np.pad(label, [(pw, pw), (ph, ph), (pd, pd)], mode='constant', constant_values=0)
+            if self.use_dismap:
+                dis_map = np.pad(dis_map, [(pw, pw), (ph, ph), (pd, pd)], mode='constant', constant_values=1.)
 
         (w, h, d) = image.shape
 
@@ -88,7 +102,13 @@ class CenterCrop(object):
         label = label[w1:w1 + self.output_size[0], h1:h1 + self.output_size[1], d1:d1 + self.output_size[2]]
         image = image[w1:w1 + self.output_size[0], h1:h1 + self.output_size[1], d1:d1 + self.output_size[2]]
 
-        return {'image': image, 'label': label}
+        sample['image'], sample['label'] = image, label
+
+        if self.use_dismap:
+            dis_map = dis_map[w1:w1 + self.output_size[0], h1:h1 + self.output_size[1], d1:d1 + self.output_size[2]]
+            sample['dis_map'] = dis_map
+
+        return sample
 
 
 class RandomCrop(object):
@@ -98,11 +118,14 @@ class RandomCrop(object):
     output_size (int): Desired output size
     """
 
-    def __init__(self, output_size):
+    def __init__(self, output_size, use_dismap=False):
         self.output_size = output_size
+        self.use_dismap = use_dismap
 
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
+        if self.use_dismap:
+            dis_map = sample['dis_map']
 
         # pad the sample if necessary
         if label.shape[0] <= self.output_size[0] or label.shape[1] <= self.output_size[1] or label.shape[2] <= \
@@ -112,6 +135,9 @@ class RandomCrop(object):
             pd = max((self.output_size[2] - label.shape[2]) // 2 + 3, 0)
             image = np.pad(image, [(pw, pw), (ph, ph), (pd, pd)], mode='constant', constant_values=0)
             label = np.pad(label, [(pw, pw), (ph, ph), (pd, pd)], mode='constant', constant_values=0)
+            if self.use_dismap:
+                dis_map = np.pad(dis_map, [(pw, pw), (ph, ph), (pd, pd)], mode='constant', constant_values=1.)
+
 
         (w, h, d) = image.shape
         # if np.random.uniform() > 0.33:
@@ -124,7 +150,12 @@ class RandomCrop(object):
 
         label = label[w1:w1 + self.output_size[0], h1:h1 + self.output_size[1], d1:d1 + self.output_size[2]]
         image = image[w1:w1 + self.output_size[0], h1:h1 + self.output_size[1], d1:d1 + self.output_size[2]]
-        return {'image': image, 'label': label}
+        if self.use_dismap:
+            dis_map = dis_map[w1:w1 + self.output_size[0], h1:h1 + self.output_size[1], d1:d1 + self.output_size[2]]
+            sample['dis_map'] = dis_map
+        sample['image'], sample['label'] = image, label
+
+        return sample 
 
 
 class RandomRotFlip(object):
@@ -133,22 +164,34 @@ class RandomRotFlip(object):
     Args:
     output_size (int): Desired output size
     """
-    def __init__(self, probability=0.6):
+    def __init__(self, probability=0.6, use_dismap=False):
         self.probability = probability
+        self.use_dismap = use_dismap
 
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
+        if self.use_dismap:
+            dis_map = sample['dis_map']
 
         if round(np.random.uniform(0,1),1) <= self.probability:
             k = random.choices([2,4],k=1)
             k = k[0]
             image = np.rot90(image, k)
             label = np.rot90(label, k)
+            if self.use_dismap:
+                dis_map = np.rot90(dis_map, k)
+
             axis = np.random.randint(0, 2)
             image = np.flip(image, axis=axis).copy()
             label = np.flip(label, axis=axis).copy()
+            if self.use_dismap:
+                dis_map = np.flip(dis_map, axis=axis).copy()
 
-        return {'image': image, 'label': label}
+            sample['image'], sample['label'] = image, label
+            if self.use_dismap:
+                sample['dis_map'] = dis_map
+
+        return sample 
 
 
 class RandomNoise(object):
@@ -180,13 +223,16 @@ class ToTensor(object):
     """Convert ndarrays in sample to Tensors."""
 
     def __call__(self, sample):
-        image = sample['image']
+        image, label = sample['image'], sample['label']
         image = image.reshape(1, image.shape[0], image.shape[1], image.shape[2]).astype(np.float32)
-        if 'onehot_label' in sample:
-            return {'image': torch.from_numpy(image), 'label': torch.from_numpy(sample['label']).long(),
-                    'onehot_label': torch.from_numpy(sample['onehot_label']).long()}
-        else:
-            return {'image': torch.from_numpy(image), 'label': torch.from_numpy(sample['label']).long()}
+        sample['image'] = torch.from_numpy(image)
+        sample['label'] = torch.from_numpy(label).long()
+        if sample['dis_map'] is not None:
+            dis_map = sample['dis_map']
+            dis_map = np.expand_dims(dis_map, 0)
+            sample['dis_map'] = torch.from_numpy(dis_map.astype(np.float32))
+
+        return sample
 
 
 class TwoStreamBatchSampler(Sampler):
@@ -234,3 +280,21 @@ def grouper(iterable, n):
     # grouper('ABCDEFG', 3) --> ABC DEF"
     args = [iter(iterable)] * n
     return zip(*args)
+
+
+
+if __name__ == "__main__":
+    db_train = ABUS(base_dir='../../data/abus_data/',
+                       split='train',
+                       use_dismap=True,
+                       transform = transforms.Compose([RandomRotFlip(use_dismap=True), 
+                                                       RandomCrop((128, 64, 128), use_dismap=True), 
+                                                       ToTensor()]))
+    def worker_init_fn(worker_id):
+        random.seed(2009+worker_id)
+    trainloader = DataLoader(db_train, batch_size=2, shuffle=True,  num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn)
+    for sample in trainloader:
+        image, label, dis_map = sample['image'], sample['label'], sample['dis_map']
+        print('image', image.shape)
+        print('label', label.shape)
+        print('dis_map', dis_map.shape)

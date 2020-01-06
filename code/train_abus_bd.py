@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import sys
 from tqdm import tqdm
 import shutil
@@ -23,7 +23,7 @@ from torchvision.utils import make_grid
 from networks.vnet import VNet
 from dataloaders.abus import ABUS, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler 
 #from dataloaders.la_heart import LAHeart, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler
-from utils.losses import dice_loss, GeneralizedDiceLoss, threshold_loss
+from utils.losses import dice_loss, boundary_loss, compute_sdf, threshold_loss, GeneralizedDiceLoss
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -38,7 +38,8 @@ def get_args():
 
     parser.add_argument('--deterministic', type=int,  default=1, help='whether use deterministic training')
     parser.add_argument('--seed', type=int,  default=2019, help='random seed')
-    parser.add_argument('--use_tm', action='store_true', default=True, help='whether use threshold_map')
+    parser.add_argument('--use_tm', action='store_true', default=False, help='whether use threshold_map')
+    parser.add_argument('--use_dismap', action='store_true', default=True, help='whether use threshold_map')
 
     parser.add_argument('--save', type=str, default='../work/abus/test')
     parser.add_argument('--writer_dir', type=str, default='../log/abus/')
@@ -100,18 +101,20 @@ def main():
 
     db_train = ABUS(base_dir=args.root_path,
                        split='train',
-                       transform = transforms.Compose([ RandomRotFlip(), RandomCrop(patch_size), ToTensor()]))
+                       use_dismap=args.use_dismap,
+                       transform = transforms.Compose([RandomRotFlip(use_dismap=args.use_dismap), RandomCrop(patch_size, use_dismap=args.use_dismap), ToTensor()]))
     def worker_init_fn(worker_id):
         random.seed(args.seed+worker_id)
     trainloader = DataLoader(db_train, batch_size=batch_size, shuffle=True,  num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn)
 
     net.train()
     optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0001)
-    gdl = GeneralizedDiceLoss()
+    #gdl = GeneralizedDiceLoss()
 
     logging.info("{} itertations per epoch".format(len(trainloader)))
 
     iter_num = 0
+    alpha = 1.0
     max_epoch = max_iterations//len(trainloader)+1
     lr_ = base_lr
     net.train()
@@ -120,8 +123,8 @@ def main():
         for i_batch, sampled_batch in enumerate(trainloader):
             time2 = time.time()
             # print('fetch data cost {}'.format(time2-time1))
-            volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
-            volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
+            volume_batch, label_batch, dis_map_batch = sampled_batch['image'], sampled_batch['label'], sampled_batch['dis_map']
+            volume_batch, label_batch, dis_map_batch = volume_batch.cuda(), label_batch.cuda(), dis_map_batch.cuda()
             #print('volume_batch.shape: ', volume_batch.shape)
             if args.use_tm:
                 outputs, tm = net(volume_batch)
@@ -137,12 +140,22 @@ def main():
             #print(label_batch.shape)
             #loss_seg_dice = gdl(outputs_soft, label_batch)
             loss_seg_dice = dice_loss(outputs_soft[:, 1, :, :, :], label_batch == 1)
+            #with torch.no_grad():
+            #    # defalut using compute_sdf; however, compute_sdf1_1 is also worth to try;
+            #    gt_sdf_npy = compute_sdf(label_batch.cpu().numpy(), outputs_soft.shape)
+            #    gt_sdf = torch.from_numpy(gt_sdf_npy).float().cuda(outputs_soft.device.index)
+            #    print('gt_sdf.shape: ', gt_sdf.shape)
+            #loss_boundary = boundary_loss(outputs_soft, gt_sdf)
+
+            #print('dis_map.shape: ', dis_map_batch.shape)
+            loss_boundary = boundary_loss(outputs_soft, dis_map_batch)
+
             if args.use_tm:
                 loss_threshold = threshold_loss(outputs_soft[:, 1, :, :, :], tm[:, 0, ...], label_batch == 1)
-                loss = (0.1 * loss_seg + 0.9 * loss_seg_dice) + 3 * loss_threshold
-                #loss = 0.1 * loss_seg + 0.9 * loss_threshold
+                loss_th = (0.1 * loss_seg + 0.9 * loss_seg_dice) + 3 * loss_threshold
+                loss = alpha*(loss_th) + (1 - alpha) * loss_boundary
             else:
-                loss = 0.01 * loss_seg + 0.99 * loss_seg_dice
+                loss = 0.01 * loss_seg + 0.99 * loss_seg_dice + (1-alpha) * loss_boundary
 
             optimizer.zero_grad()
             loss.backward()
@@ -155,12 +168,16 @@ def main():
             writer.add_scalar('train/lr', lr_, iter_num)
             writer.add_scalar('train/loss_seg', loss_seg, iter_num)
             writer.add_scalar('train/loss_seg_dice', loss_seg_dice, iter_num)
+            writer.add_scalar('train/alpha', alpha, iter_num)
             writer.add_scalar('train/loss', loss, iter_num)
             writer.add_scalar('train/dice', dice, iter_num)
             if args.use_tm:
                 writer.add_scalar('train/loss_threshold', loss_threshold, iter_num)
+            if args.use_dismap:
+                writer.add_scalar('train/loss_dis', loss_boundary, iter_num)
 
             logging.info('iteration %d : loss : %f' % (iter_num, loss.item()))
+            logging.info('iteration %d : alpha : %f' % (iter_num, alpha))
 
             if iter_num % 50 == 0:
                 image = volume_batch[0, 0:1, :, 30:71:10, :].permute(2,0,1,3)
@@ -177,7 +194,8 @@ def main():
                 grid_gt = make_grid(gt, 5, normalize=False)
                 grid_gt = grid_gt.cpu().detach().numpy().transpose((1,2,0))
 
-                image_tm = tm[0, :, :, 30:71:10, :].permute(2,0,1,3)
+                image_tm = dis_map_batch[0, :, :, 30:71:10, :].permute(2,0,1,3)
+                #image_tm = tm[0, :, :, 30:71:10, :].permute(2,0,1,3)
                 grid_tm = make_grid(image_tm, 5, normalize=False)
                 grid_tm = grid_tm.cpu().detach().numpy().transpose((1,2,0))
 
@@ -207,6 +225,9 @@ def main():
             if iter_num > max_iterations:
                 break
             time1 = time.time()
+        alpha -= 0.005
+        if alpha <= 0.01:
+            alpha = 0.01
         if iter_num > max_iterations:
             break
     save_mode_path = os.path.join(snapshot_path, 'iter_'+str(max_iterations+1)+'.pth')
