@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import math
 import argparse
 from tqdm import tqdm 
@@ -50,7 +50,7 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
     sx = math.ceil((ww - patch_size[0]) / stride_xy) + 1
     sy = math.ceil((hh - patch_size[1]) / stride_xy) + 1
     sz = math.ceil((dd - patch_size[2]) / stride_z) + 1
-    print("{}, {}, {}".format(sx, sy, sz))
+    #print("{}, {}, {}".format(sx, sy, sz))
     score_map = np.zeros((num_classes, ) + image.shape).astype(np.float32)
     cnt = np.zeros(image.shape).astype(np.float32)
 
@@ -76,15 +76,15 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
                   = cnt[xs:xs+patch_size[0], ys:ys+patch_size[1], zs:zs+patch_size[2]] + 1
     score_map = score_map/np.expand_dims(cnt,axis=0)
     #label_map = np.argmax(score_map, axis = 0)
-    label_map = score_map[1]
+    label_map = score_map[1].copy()
     label_map[label_map > 0.2] = 1
     label_map[label_map != 1] = 0
-    print('label_max:', label_map.max())
+    #print('label_max:', label_map.max())
 
     if add_pad:
         label_map = label_map[wl_pad:wl_pad+w,hl_pad:hl_pad+h,dl_pad:dl_pad+d]
         score_map = score_map[:,wl_pad:wl_pad+w,hl_pad:hl_pad+h,dl_pad:dl_pad+d]
-    return label_map, score_map
+    return label_map, score_map 
 
 
 def calculate_metric_percase(pred, gt):
@@ -136,9 +136,15 @@ def test_all_case(net, testloader, num_classes, patch_size, stride_xy=18, stride
             test_save_path_temp = os.path.join(test_save_path, case_name)
             if not os.path.exists(test_save_path_temp):
                 os.makedirs(test_save_path_temp)
-            nib.save(nib.Nifti1Image(prediction.astype(np.float32), np.eye(4)), test_save_path_temp + '/'  + "pred.nii.gz")
-            nib.save(nib.Nifti1Image(image[:].astype(np.float32), np.eye(4)), test_save_path_temp + '/' +  "img.nii.gz")
-            nib.save(nib.Nifti1Image(label[:].astype(np.float32), np.eye(4)), test_save_path_temp + '/' + "gt.nii.gz")
+
+            prediction = transpose(prediction.astype(np.float32))
+            score_map = transpose(score_map[1].astype(np.float32))
+            image = transpose(image[:].astype(np.float32))
+            label = transpose(label[:].astype(np.float32))
+            nib.save(nib.Nifti1Image(prediction, np.eye(4)), test_save_path_temp + '/'  + "pred.nii.gz")
+            nib.save(nib.Nifti1Image(score_map, np.eye(4)), test_save_path_temp + '/'  + "prob.nii.gz")
+            nib.save(nib.Nifti1Image(image, np.eye(4)), test_save_path_temp + '/' +  "img.nii.gz")
+            nib.save(nib.Nifti1Image(label, np.eye(4)), test_save_path_temp + '/' + "gt.nii.gz")
     avg_metric = total_metric / len(testloader)
     metric_csv = pd.DataFrame(metric_dict)
     metric_csv.to_csv(test_save_path + '/metric.csv', index=False)
@@ -146,6 +152,11 @@ def test_all_case(net, testloader, num_classes, patch_size, stride_xy=18, stride
 
     return avg_metric
 
+def transpose(image):
+    image = np.transpose(image, (2, 0, 1))
+    
+    return image
+    
 def test_calculate_metric(args):
     net = VNet(n_channels=1, n_classes=args.num_classes, normalization='batchnorm', has_dropout=False, use_tm=True).cuda()
     save_mode_path = os.path.join(args.snapshot_path, 'iter_' + str(args.start_epoch) + '.pth')
@@ -154,7 +165,7 @@ def test_calculate_metric(args):
     net.eval()
 
     avg_metric = test_all_case(net, args.testloader, num_classes=args.num_classes,
-                               patch_size=(128, 64, 128), stride_xy=18, stride_z=4,
+                               patch_size=(64, 128, 128), stride_xy=18, stride_z=4,
                                save_result=True, test_save_path=args.test_save_path)
 
     return avg_metric
@@ -162,9 +173,9 @@ def test_calculate_metric(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root_path', type=str, default='../data/abus_data/', help='data root path')
-    parser.add_argument('--snapshot_path', type=str, default='../work/abus/0104-ce-dice-th-abus/', help='snapshot path')
-    parser.add_argument('--test_save_path', type=str, default='./results/abus/01-04-dice-th', help='save path')
+    parser.add_argument('--root_path', type=str, default='../data/abus_roi/', help='data root path')
+    parser.add_argument('--snapshot_path', type=str, default='../work/abus_roi/0108-dice-1/', help='snapshot path')
+    parser.add_argument('--test_save_path', type=str, default='./results/abus_roi/0108_dice_1/', help='save path')
     parser.add_argument('--num_classes', type=int, default=2, help='number of classes')
     parser.add_argument('--start_epoch', type=int, default=50000)
     args = parser.parse_args()

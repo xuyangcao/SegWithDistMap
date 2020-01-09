@@ -25,9 +25,9 @@ def distance_transform(img_path, label_path, filename, lamb=0.5, iter_num=2):
 
 
 def main():
-    img_path = './abus_data/image'
-    label_path = './abus_data/label'
-    save_path = './abus_data/geodt'
+    img_path = './abus_roi/image'
+    label_path = './abus_roi/label'
+    save_path = './abus_roi/dis_map'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
@@ -35,7 +35,7 @@ def main():
     filenames.sort()
 
     for filename in tqdm.tqdm(filenames):
-        dis = distance_transform(img_path, label_path, filename, lamb=0.5, iter_num=2)
+        dis = distance_transform(img_path, label_path, filename, lamb=0.5, iter_num=8)
         img = sitk.GetImageFromArray(dis) 
         sitk.WriteImage(img, os.path.join(save_path, filename[:-3]+'nii.gz'))
         

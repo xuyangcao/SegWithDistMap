@@ -6,6 +6,27 @@ from scipy.ndimage import distance_transform_edt as distance
 from skimage import segmentation as skimage_seg
 
 
+def generalized_distance_transform(inputs):
+    in_shape = inputs.shape 
+    
+    i = torch.arange(in_shape[1]).float()
+    j = torch.arange(in_shape[2]).float()
+
+    coords = torch.stack(torch.meshgrid(i, j), -1)
+    print('coords: ', coords.shape)
+
+    d_pq = torch.norm(torch.reshape(coords, (-1, 1, 2))
+                     -torch.reshape(coords, (1, -1, 2)), dim=-1, keepdim=True)
+
+    d_pq = d_pq.cuda()
+    f_q = torch.reshape(inputs, (-1, 1, in_shape[1]*in_shape[2], in_shape[3]))
+    print('d_pq.shape: ', d_pq.shape)
+    print('fq.shape: ', f_q.shape)
+
+    dt = torch.mean(d_pq + f_q, dim=2)
+    dt = torch.reshape(dt, in_shape)
+    return dt
+
 class GeneralizedDiceLoss(nn.Module):
     # generalized Dice Loss
     def __init__(self):
@@ -89,7 +110,7 @@ def boundary_loss(outputs_soft, gt_sdf):
     output: boundary_loss; sclar
     """
     pc = outputs_soft[:,1,...]
-    dc = gt_sdf[:,1,...]
+    dc = gt_sdf[:,0,...]
     multipled = torch.einsum('bxyz, bxyz->bxyz', pc, dc)
     bd_loss = multipled.mean()
 

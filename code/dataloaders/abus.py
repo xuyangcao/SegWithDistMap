@@ -221,15 +221,18 @@ class CreateOnehotLabel(object):
 
 class ToTensor(object):
     """Convert ndarrays in sample to Tensors."""
+    def __init__(self, use_dismap=False):
+        self.use_dismap = use_dismap
 
     def __call__(self, sample):
         image, label = sample['image'], sample['label']
         image = image.reshape(1, image.shape[0], image.shape[1], image.shape[2]).astype(np.float32)
         sample['image'] = torch.from_numpy(image)
         sample['label'] = torch.from_numpy(label).long()
-        if sample['dis_map'] is not None:
+        if self.use_dismap:
             dis_map = sample['dis_map']
             dis_map = np.expand_dims(dis_map, 0)
+            #print('dis_map.shape: ', dis_map.shape)
             sample['dis_map'] = torch.from_numpy(dis_map.astype(np.float32))
 
         return sample
