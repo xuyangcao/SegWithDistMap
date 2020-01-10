@@ -19,6 +19,18 @@ from networks.vnet import VNet
 from utils.test_util import test_all_case
 from dataloaders.abus import ABUS, RandomCrop, CenterCrop, RandomRotFlip, ToTensor, TwoStreamBatchSampler 
 
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root_path', type=str, default='../data/abus_roi/', help='data root path')
+    parser.add_argument('--num_classes', type=int, default=2, help='number of classes')
+    parser.add_argument('--start_epoch', type=int, default=30000)
+
+    parser.add_argument('--snapshot_path', type=str, default='../work/abus_roi/0108-dice-1/', help='snapshot path')
+    parser.add_argument('--test_save_path', type=str, default='./results/abus_roi/0108_dice_1/', help='save path')
+
+    args = parser.parse_args()
+    return args
+
 def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1):
     w, h, d = image.shape
     #print(image.shape)
@@ -77,7 +89,7 @@ def test_single_case(net, image, stride_xy, stride_z, patch_size, num_classes=1)
     score_map = score_map/np.expand_dims(cnt,axis=0)
     #label_map = np.argmax(score_map, axis = 0)
     label_map = score_map[1].copy()
-    label_map[label_map > 0.2] = 1
+    label_map[label_map > 0.5] = 1
     label_map[label_map != 1] = 0
     #print('label_max:', label_map.max())
 
@@ -129,7 +141,6 @@ def test_all_case(net, testloader, num_classes, patch_size, stride_xy=18, stride
             metric_dict['95hd'].append(single_metric[3])
             # print(metric_dict)
 
-
         total_metric += np.asarray(single_metric)
 
         if save_result:
@@ -146,49 +157,31 @@ def test_all_case(net, testloader, num_classes, patch_size, stride_xy=18, stride
             nib.save(nib.Nifti1Image(image, np.eye(4)), test_save_path_temp + '/' +  "img.nii.gz")
             nib.save(nib.Nifti1Image(label, np.eye(4)), test_save_path_temp + '/' + "gt.nii.gz")
     avg_metric = total_metric / len(testloader)
-    metric_csv = pd.DataFrame(metric_dict)
-    metric_csv.to_csv(test_save_path + '/metric.csv', index=False)
     print('average metric is {}'.format(avg_metric))
-
     return avg_metric
 
 def transpose(image):
     image = np.transpose(image, (2, 0, 1))
-    
     return image
     
-def test_calculate_metric(args):
+def main():
+    args = get_args()
+    if not os.path.exists(args.test_save_path):
+        os.makedirs(args.test_save_path)
+
+    db_test = ABUS(base_dir=args.root_path, split='test')
+    testloader = DataLoader(db_test, batch_size=1, shuffle=False,  num_workers=1, pin_memory=True)
+    args.testloader = testloader
+
     net = VNet(n_channels=1, n_classes=args.num_classes, normalization='batchnorm', has_dropout=False, use_tm=True).cuda()
     save_mode_path = os.path.join(args.snapshot_path, 'iter_' + str(args.start_epoch) + '.pth')
     net.load_state_dict(torch.load(save_mode_path))
     print("init weight from {}".format(save_mode_path))
     net.eval()
 
-    avg_metric = test_all_case(net, args.testloader, num_classes=args.num_classes,
+    test_all_case(net, args.testloader, num_classes=args.num_classes,
                                patch_size=(64, 128, 128), stride_xy=18, stride_z=4,
                                save_result=True, test_save_path=args.test_save_path)
-
-    return avg_metric
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--root_path', type=str, default='../data/abus_roi/', help='data root path')
-    parser.add_argument('--snapshot_path', type=str, default='../work/abus_roi/0108-dice-1/', help='snapshot path')
-    parser.add_argument('--test_save_path', type=str, default='./results/abus_roi/0108_dice_1/', help='save path')
-    parser.add_argument('--num_classes', type=int, default=2, help='number of classes')
-    parser.add_argument('--start_epoch', type=int, default=50000)
-    args = parser.parse_args()
-
-    if not os.path.exists(args.test_save_path):
-        os.makedirs(args.test_save_path)
-
-    db_test = ABUS(base_dir=args.root_path, split='test')
-
-    testloader = DataLoader(db_test, batch_size=1, shuffle=False,  num_workers=1, pin_memory=True)
-    args.testloader = testloader
-
-    metric = test_calculate_metric(args)
 
 if __name__ == '__main__':
     main()

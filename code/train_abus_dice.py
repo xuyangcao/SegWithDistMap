@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import sys
 from tqdm import tqdm
 import shutil
@@ -28,10 +28,9 @@ from utils.losses import dice_loss, GeneralizedDiceLoss, threshold_loss
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_path', type=str, default='../data/abus_roi/', help='Name of Experiment')
-    #parser.add_argument('--root_path', type=str, default='../data/abus_data/', help='Name of Experiment')
 
-    parser.add_argument('--max_iterations', type=int,  default=50000, help='maximum epoch number to train')
-    parser.add_argument('--batch_size', type=int, default=5, help='batch_size per gpu')
+    parser.add_argument('--max_iterations', type=int,  default=40000, help='maximum epoch number to train')
+    parser.add_argument('--batch_size', type=int, default=8, help='batch_size per gpu')
     parser.add_argument('--ngpu', type=int, default=1)
     parser.add_argument('--base_lr', type=float,  default=0.001, help='maximum epoch number to train')
 
@@ -42,6 +41,7 @@ def get_args():
     parser.add_argument('--save', type=str, default='../work/abus_roi/test')
     parser.add_argument('--writer_dir', type=str, default='../log/abus_roi/')
 
+    parser.add_argument('--fold', type=str,  default='1', help='random seed')
 
     args = parser.parse_args()
 
@@ -91,6 +91,7 @@ def main():
 
     db_train = ABUS(base_dir=args.root_path,
                        split='train',
+                       fold=args.fold,
                        transform = transforms.Compose([RandomRotFlip(), RandomCrop(patch_size), ToTensor()]))
     def worker_init_fn(worker_id):
         random.seed(args.seed+worker_id)
@@ -130,7 +131,7 @@ def main():
             loss_seg_dice = dice_loss(outputs_soft[:, 1, :, :, :], label_batch == 1)
             if args.use_tm:
                 loss_threshold = threshold_loss(outputs_soft[:, 1, :, :, :], tm[:, 0, ...], label_batch == 1)
-                loss = (0.1 * loss_seg + 0.9 * loss_seg_dice) + 3 * loss_threshold
+                loss = loss_seg_dice + 3 * loss_threshold
             else:
                 loss = loss_seg_dice
 

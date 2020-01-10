@@ -16,17 +16,17 @@ from torchvision import transforms
 
 class ABUS(Dataset):
     """ ABUS dataset """
-    def __init__(self, base_dir=None, split='train', num=None, use_dismap=False, transform=None):
+    def __init__(self, base_dir=None, split='train', fold='1', num=None, use_dismap=False, transform=None):
         self._base_dir = base_dir
         self.transform = transform
         self.sample_list = []
         self.split = split
         self.use_dismap = use_dismap 
         if split=='train':
-            with open(self._base_dir+'/../abus_train.list', 'r') as f:
+            with open(self._base_dir+'/../abus_train.list.'+fold, 'r') as f:
                 self.image_list = f.readlines()
         elif split == 'test':
-            with open(self._base_dir+'/../abus_test.list', 'r') as f:
+            with open(self._base_dir+'/../abus_test.list.'+fold, 'r') as f:
                 self.image_list = f.readlines()
         self.image_list = [item.replace('\n','') for item in self.image_list]
         if num is not None:

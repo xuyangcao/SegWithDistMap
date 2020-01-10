@@ -155,7 +155,7 @@ def main():
                 loss_th = (0.1 * loss_seg + 0.9 * loss_seg_dice) + 3 * loss_threshold
                 loss = alpha*(loss_th) + (1 - alpha) * loss_boundary
             else:
-                loss = loss_seg_dice + (1-alpha) * loss_boundary
+                loss = alpha * loss_seg_dice + (1-alpha) * loss_boundary
 
             optimizer.zero_grad()
             loss.backward()
